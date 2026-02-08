@@ -3,6 +3,18 @@ import torch, numpy as np
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 from time import time
+from queue import Queue
+from threading import Thread
+import cv2
+
+def writer_thread(out_path, fps, width, height, queue):
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(out_path, fourcc, fps, (width*2, height))
+    while True:
+        item = queue.get()
+        if item is None: break
+        out.write(item)
+    out.release()
 
 class DukeStereoSBS:
     """
@@ -13,6 +25,7 @@ class DukeStereoSBS:
     def INPUT_TYPES(s):
         return {
             "required": {
+                "output_path": ("STRING", {"default": "/ComfyUI/output/stereo_output.mp4"}),
                 "images": ("IMAGE",),                           # Bild-Input von anderem Node
             },
             "optional": {
@@ -22,12 +35,12 @@ class DukeStereoSBS:
                 "warp_batch_size": ("INT", {"default": 64, "min": 4, "max": 256}),
                 "depth_blur": ("INT", {"default": 6, "min": 0, "max": 10}),
                 "divergence": ("FLOAT", {"default": 2.5, "min": 0.0, "max": 10.0, "step": 0.1}),
-                
+                "fps": ("INT", {"default": 24, "min": 1, "max": 120, "step": 1})
             }
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("SBS Images",)
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("video_path",)
     FUNCTION = "execute"
     CATEGORY = "Stereo"
 
@@ -43,7 +56,6 @@ class DukeStereoSBS:
 
     @torch.no_grad()
     def stereo_warp_streaming(self,imgs, depths, div, warp_batch_size,depth_blur):
-        return_images = []
         for i in range(0, len(imgs), warp_batch_size):
             batch_imgs = imgs[i:i+warp_batch_size]
             batch_depths = depths[i:i+warp_batch_size]
@@ -67,10 +79,11 @@ class DukeStereoSBS:
             right = torch.nn.functional.grid_sample(img_t, gr, padding_mode='border', align_corners=True)
             # Optimiert: Alles auf GPU
             sbs = torch.cat([left, right], dim=3)           # SBS auf GPU
-            sbs = (sbs.permute(0,2,3,1) * 255).to(torch.uint8)  # NCHW→NHWC, uint8
+            sbs = sbs.flip(dims=[1])
+            sbs = (sbs.permute(0,2,3,1) * 255).to(torch.uint8)  # NCHW→NHWC, uint8   
             sbs_np = sbs.cpu().numpy()                       # Ein Transfer pro Batch
-            return_images.append(sbs_np)
-        return return_images
+            for frame in sbs_np:
+                self.write_queue.put(frame)
 
     def load_model(self, model):
         model_id = f"depth-anything/Depth-Anything-V2-{model}-hf"
@@ -78,7 +91,7 @@ class DukeStereoSBS:
         self.model = AutoModelForDepthEstimation.from_pretrained(model_id).cuda().half()
 
         
-    def execute(self, images, model="Large", depth_size=518, divergence=2.5, depth_blur=6,warp_batch_size=64,depth_batch_size=64):
+    def execute(self, images,output_path, model="Large",fps=24, depth_size=518, divergence=2.5, depth_blur=6,warp_batch_size=64,depth_batch_size=64):
         self.load_model(model)
 
         # h, w aus erstem Bild
@@ -87,20 +100,18 @@ class DukeStereoSBS:
         gy, gx = torch.meshgrid(torch.linspace(-1,1,self.h), torch.linspace(-1,1,self.w), indexing='ij')
 
         self.base_grid = torch.stack([gx, gy], dim=-1).unsqueeze(0).cuda()
-                
-                # Images zu PIL Liste konvertieren
+
+        self.write_queue = Queue(maxsize=16)
+        writer = Thread(target=writer_thread, args=(output_path, fps, self.w, self.h, self.write_queue))
+        writer.start()
         imgs = [Image.fromarray((img.cpu().numpy() * 255).astype(np.uint8)) for img in images]
+        depths = self.depth_batch(imgs, depth_batch_size, depth_size)
+        self.stereo_warp_streaming(imgs, depths, divergence, warp_batch_size, depth_blur)
+        self.write_queue.put(None)
+        writer.join()
 
-        # Depth berechnen
-        depths = self.depth_batch(imgs, depth_batch_size,depth_size)
+        return (output_path,)
 
-        # Stereo Warp
-        result = self.stereo_warp_streaming(imgs, depths, divergence, warp_batch_size, depth_blur)
-
-        # Zurück zu Tensor (B, H, W*2, C), float 0-1
-        output = torch.from_numpy(np.concatenate(result, axis=0)).float() / 255
-
-        return (output,)
 
 # Mappings für die Registrierung der Node
 NODE_CLASS_MAPPINGS = {
