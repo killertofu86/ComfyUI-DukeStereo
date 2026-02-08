@@ -31,3 +31,11 @@ pip install -r ComfyUI-DukeStereo/requirements.txt
 ## License
 
 MIT
+
+## Notes
+
+-  must be a complete file path including filename, e.g. 
+- Output format is MP4 only
+
+### TODO
+- Add comfort features like auto-naming (timestamp), output directory selection (similar to VHS Video Combine node)
