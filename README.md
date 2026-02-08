@@ -34,7 +34,7 @@ MIT
 
 ## Notes
 
--  must be a complete file path including filename, e.g. 
+- `output_path` must be a complete file path including filename, e.g. `/home/user/output/stereo.mp4`
 - Output format is MP4 only
 
 ### TODO
