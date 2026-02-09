@@ -6,7 +6,7 @@ from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 from time import time
 from queue import Queue
 from threading import Thread
-import cv2
+import subprocess
 
 try:
     from numba import njit, prange
@@ -18,19 +18,33 @@ except Exception as e:
         return Inner
 
 
-def writer_thread(out_path, fps, width, height, queue):
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(out_path, fourcc, fps, (width * 2, height))
+def writer_thread(out_path, fps, width, height, queue, crf=19):
+    cmd = [
+        'ffmpeg', '-y',
+        '-f', 'rawvideo',
+        '-vcodec', 'rawvideo',
+        '-s', f'{width*2}x{height}',
+        '-pix_fmt', 'rgb24',
+        '-r', str(fps),
+        '-i', '-',
+        '-c:v', 'libx264',
+        '-pix_fmt', 'yuv420p',
+        '-crf', str(crf),
+        '-preset', 'medium',
+        out_path
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
     while True:
         item = queue.get()
         if item is None:
             break
-        out.write(item)
-    out.release()
+        proc.stdin.write(item.tobytes())
+    proc.stdin.close()
+    proc.wait()
 
 
 @njit(parallel=True)
-def Das mit den Friends haben wir extra gemacht, dass er sie direkt wegschreibt, weil ich sonst mit meinem Ramm nicht hinkomme.apply_stereo_divergence_polylines(original_image, normalized_depth, divergence_px: float, separation_px: float, stereo_offset_exponent: float, fill_technique: str):
+def apply_stereo_divergence_polylines(original_image, normalized_depth, divergence_px: float, separation_px: float, stereo_offset_exponent: float, fill_technique: str):
     """
     Polylines-basierter Stereo-Warp mit intelligentem Lücken-Füllen.
     Aus stereoimage_generation.py übernommen.
@@ -151,6 +165,7 @@ class DukeStereoSBS:
                 "fill_technique": (["polylines_soft", "polylines_sharp", "none"],),
                 "stereo_offset_exponent": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 4.0, "step": 0.1}),
                 "convergence_point": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "crf": ("INT", {"default": 19, "min": 0, "max": 51}),
             }
         }
 
@@ -201,7 +216,8 @@ class DukeStereoSBS:
                 # Optional: Depth Blur
                 if depth_blur > 0:
                     kernel = depth_blur if depth_blur % 2 == 1 else depth_blur + 1
-                    depth_norm = cv2.blur(depth_norm, (kernel, kernel))
+                    from scipy.ndimage import uniform_filter
+                    depth_norm = uniform_filter(depth_norm, size=kernel)
                 
                 if fill_technique == "none":
                     # Fallback: einfacher grid_sample (alter Code)
@@ -216,10 +232,9 @@ class DukeStereoSBS:
                         img_np, depth_norm, -divergence_px, 0.0, stereo_offset_exponent, fill_technique
                     )
                 
-                # SBS zusammenfügen (BGR für OpenCV)
+                # SBS zusammenfügen (RGB für ffmpeg)
                 sbs = np.concatenate([left, right], axis=1)
-                sbs_bgr = cv2.cvtColor(sbs, cv2.COLOR_RGB2BGR)
-                self.write_queue.put(sbs_bgr)
+                self.write_queue.put(sbs)
 
     def _simple_warp(self, img_np, depth_norm, divergence_px):
         """Einfacher GPU-Warp als Fallback (alte Methode)."""
@@ -241,7 +256,7 @@ class DukeStereoSBS:
 
     def execute(self, images, output_path, model="Large", fps=24, depth_size=518, 
                 divergence=2.5, depth_blur=6, warp_batch_size=64, depth_batch_size=64,
-                fill_technique="polylines_soft", stereo_offset_exponent=1.0, convergence_point=0.5):
+                fill_technique="polylines_soft", stereo_offset_exponent=1.0, convergence_point=0.5, crf=19):
         
         self.load_model(model)
         
@@ -252,7 +267,7 @@ class DukeStereoSBS:
         self.base_grid = torch.stack([gx, gy], dim=-1).unsqueeze(0).cuda()
         
         self.write_queue = Queue(maxsize=16)
-        writer = Thread(target=writer_thread, args=(output_path, fps, self.w, self.h, self.write_queue))
+        writer = Thread(target=writer_thread, args=(output_path, fps, self.w, self.h, self.write_queue, crf))
         writer.start()
         
         imgs = [Image.fromarray((img.cpu().numpy() * 255).astype(np.uint8)) for img in images]
