@@ -7,6 +7,41 @@ from time import time
 from queue import Queue
 from threading import Thread
 import subprocess
+import os
+import re
+from datetime import datetime
+from pathlib import Path
+
+def resolve_output_path(path_template):
+    """
+    Resolve format strings and auto-increment if file exists.
+    Supports: %date:FORMAT%, %time:FORMAT% (Java-style format converted to Python)
+    """
+    now = datetime.now()
+    
+    # Convert %date:FORMAT% and %time:FORMAT% patterns
+    def replace_format(match):
+        fmt_type, fmt = match.group(1), match.group(2)
+        # Convert Java-style format to Python strftime
+        fmt = fmt.replace('yyyy', '%Y').replace('yy', '%y')
+        fmt = fmt.replace('MM', '%m').replace('dd', '%d')
+        fmt = fmt.replace('HH', '%H').replace('mm', '%M').replace('ss', '%S')
+        return now.strftime(fmt)
+    
+    path = re.sub(r'%(\w+):([^%]+)%', replace_format, path_template)
+    
+    # Create directories if needed
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    
+    # Auto-increment if file exists
+    if os.path.exists(path):
+        base, ext = os.path.splitext(path)
+        counter = 1
+        while os.path.exists(f"{base}_{counter:03d}{ext}"):
+            counter += 1
+        path = f"{base}_{counter:03d}{ext}"
+    
+    return path
 
 try:
     from numba import njit, prange
@@ -265,6 +300,10 @@ class DukeStereoSBS:
         # base_grid für Fallback-Warp
         gy, gx = torch.meshgrid(torch.linspace(-1, 1, self.h), torch.linspace(-1, 1, self.w), indexing='ij')
         self.base_grid = torch.stack([gx, gy], dim=-1).unsqueeze(0).cuda()
+        
+        # Resolve format strings and auto-increment
+        output_path = resolve_output_path(output_path)
+        print(f"[DukeStereo] Writing to: {output_path}")
         
         self.write_queue = Queue(maxsize=16)
         writer = Thread(target=writer_thread, args=(output_path, fps, self.w, self.h, self.write_queue, crf))
