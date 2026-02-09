@@ -273,8 +273,11 @@ class DukeStereoSBS:
                                separation, warp_batch_size, fill_technique, 
                                stereo_offset_exponent, convergence_point):
         """Stereo-Warp mit Polylines Fill-Technik."""
+        import comfy.utils
         
         divergence_px = divergence * (self.w / 100)
+        total_frames = len(imgs)
+        pbar = comfy.utils.ProgressBar(total_frames)
         
         for i in range(0, len(imgs), warp_batch_size):
             batch_imgs = imgs[i:i + warp_batch_size]
@@ -307,6 +310,7 @@ class DukeStereoSBS:
                 # SBS zusammenfügen (RGB für ffmpeg)
                 sbs = np.concatenate([left, right], axis=1)
                 self.write_queue.put(sbs)
+                pbar.update(1)
 
     def _simple_warp(self, img_np, depth_norm, divergence_px):
         """Einfacher GPU-Warp als Fallback (alte Methode)."""
@@ -341,6 +345,22 @@ class DukeStereoSBS:
         
         # Resolve format strings and auto-increment
         output_path = resolve_output_path(output_path)
+        
+        # Validate output path
+        output_dir = Path(output_path).parent
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            raise Exception(f"[DukeStereo] Cannot create directory: {output_dir}")
+        
+        # Test write permissions
+        test_file = output_dir / ".duke_stereo_write_test"
+        try:
+            test_file.touch()
+            test_file.unlink()
+        except PermissionError:
+            raise Exception(f"[DukeStereo] No write permission in: {output_dir}")
+        
         print(f"[DukeStereo] Writing to: {output_path}")
         
         self.write_queue = Queue(maxsize=16)
