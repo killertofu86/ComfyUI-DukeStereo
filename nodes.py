@@ -53,6 +53,39 @@ except Exception as e:
         return Inner
 
 
+def edge_aware_blur(depth, kernel_size, edge_threshold):
+    """
+    Edge-aware blur that preserves depth discontinuities.
+    Uses bilateral-like filtering: only blur pixels with similar depth values.
+    """
+    from scipy.ndimage import uniform_filter, sobel
+    
+    if edge_threshold <= 0:
+        # Standard blur without edge preservation
+        return uniform_filter(depth, size=kernel_size)
+    
+    # Compute depth gradients (edges)
+    grad_x = sobel(depth, axis=1)
+    grad_y = sobel(depth, axis=0)
+    edge_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+    
+    # Normalize edge magnitude
+    edge_max = edge_magnitude.max()
+    if edge_max > 0:
+        edge_magnitude = edge_magnitude / edge_max
+    
+    # Create mask: 1 = smooth area, 0 = edge
+    edge_mask = (edge_magnitude < edge_threshold / 10.0).astype(np.float32)
+    
+    # Blur the depth
+    blurred = uniform_filter(depth, size=kernel_size)
+    
+    # Blend: use blurred in smooth areas, original at edges
+    result = blurred * edge_mask + depth * (1 - edge_mask)
+    
+    return result
+
+
 def writer_thread(out_path, fps, width, height, queue, crf=19):
     cmd = [
         'ffmpeg', '-y',
@@ -194,8 +227,10 @@ class DukeStereoSBS:
                 "depth_size": ("INT", {"default": 518, "min": 128, "max": 1024}),
                 "depth_batch_size": ("INT", {"default": 64, "min": 4, "max": 256}),
                 "warp_batch_size": ("INT", {"default": 64, "min": 4, "max": 256}),
-                "depth_blur": ("INT", {"default": 6, "min": 0, "max": 10}),
+                "depth_blur": ("INT", {"default": 6, "min": 0, "max": 20}),
+                "depth_blur_edge_threshold": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 20.0, "step": 0.5}),
                 "divergence": ("FLOAT", {"default": 2.5, "min": 0.0, "max": 10.0, "step": 0.1}),
+                "separation": ("FLOAT", {"default": 0.0, "min": -5.0, "max": 5.0, "step": 0.1}),
                 "fps": ("INT", {"default": 24, "min": 1, "max": 120, "step": 1}),
                 "fill_technique": (["polylines_soft", "polylines_sharp", "none"],),
                 "stereo_offset_exponent": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 4.0, "step": 0.1}),
@@ -234,8 +269,9 @@ class DukeStereoSBS:
         
         return normalized
 
-    def stereo_warp_polylines(self, imgs, depths, divergence, depth_blur, warp_batch_size, 
-                               fill_technique, stereo_offset_exponent, convergence_point):
+    def stereo_warp_polylines(self, imgs, depths, divergence, depth_blur, depth_blur_edge_threshold,
+                               separation, warp_batch_size, fill_technique, 
+                               stereo_offset_exponent, convergence_point):
         """Stereo-Warp mit Polylines Fill-Technik."""
         
         divergence_px = divergence * (self.w / 100)
@@ -248,11 +284,12 @@ class DukeStereoSBS:
                 img_np = np.array(img, dtype=np.uint8)
                 depth_norm = self.normalize_depth(depth, self.h, self.w, convergence_point)
                 
-                # Optional: Depth Blur
+                # Optional: Edge-aware Depth Blur
                 if depth_blur > 0:
                     kernel = depth_blur if depth_blur % 2 == 1 else depth_blur + 1
-                    from scipy.ndimage import uniform_filter
-                    depth_norm = uniform_filter(depth_norm, size=kernel)
+                    depth_norm = edge_aware_blur(depth_norm, kernel, depth_blur_edge_threshold)
+                
+                separation_px = separation * (self.w / 100)
                 
                 if fill_technique == "none":
                     # Fallback: einfacher grid_sample (alter Code)
@@ -261,10 +298,10 @@ class DukeStereoSBS:
                 else:
                     # Polylines-basierter Warp
                     left = apply_stereo_divergence_polylines(
-                        img_np, depth_norm, divergence_px, 0.0, stereo_offset_exponent, fill_technique
+                        img_np, depth_norm, divergence_px, -separation_px, stereo_offset_exponent, fill_technique
                     )
                     right = apply_stereo_divergence_polylines(
-                        img_np, depth_norm, -divergence_px, 0.0, stereo_offset_exponent, fill_technique
+                        img_np, depth_norm, -divergence_px, separation_px, stereo_offset_exponent, fill_technique
                     )
                 
                 # SBS zusammenfügen (RGB für ffmpeg)
@@ -290,7 +327,8 @@ class DukeStereoSBS:
         self.model = AutoModelForDepthEstimation.from_pretrained(model_id).cuda().half()
 
     def execute(self, images, output_path, model="Large", fps=24, depth_size=518, 
-                divergence=2.5, depth_blur=6, warp_batch_size=64, depth_batch_size=64,
+                divergence=2.5, depth_blur=6, depth_blur_edge_threshold=6.0, separation=0.0,
+                warp_batch_size=64, depth_batch_size=64,
                 fill_technique="polylines_soft", stereo_offset_exponent=1.0, convergence_point=0.5, crf=19):
         
         self.load_model(model)
@@ -312,8 +350,9 @@ class DukeStereoSBS:
         imgs = [Image.fromarray((img.cpu().numpy() * 255).astype(np.uint8)) for img in images]
         depths = self.depth_batch(imgs, depth_batch_size, depth_size)
         
-        self.stereo_warp_polylines(imgs, depths, divergence, depth_blur, warp_batch_size,
-                                    fill_technique, stereo_offset_exponent, convergence_point)
+        self.stereo_warp_polylines(imgs, depths, divergence, depth_blur, depth_blur_edge_threshold,
+                                    separation, warp_batch_size, fill_technique, 
+                                    stereo_offset_exponent, convergence_point)
         
         self.write_queue.put(None)
         writer.join()

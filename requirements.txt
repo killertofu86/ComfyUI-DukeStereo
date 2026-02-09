@@ -2,3 +2,5 @@ torch
 transformers
 numpy
 Pillow
+numba
+scipy
