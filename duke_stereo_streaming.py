@@ -144,11 +144,10 @@ class DukeStereoVideo:
                 depth_np = depth_np[:, :, 0]
             
             # Depth Map auf Frame-Größe skalieren falls nötig
-            if depth_np.shape != (h, w):
-                from PIL import Image as PILImage
-                depth_pil = PILImage.fromarray(depth_np)
-                depth_pil = depth_pil.resize((w, h), PILImage.BILINEAR)
-                depth_np = np.array(depth_pil)
+            if depth_np.shape[:2] != (h, w):
+                depth_t = torch.from_numpy(depth_np).unsqueeze(0).unsqueeze(0).float()
+                depth_t = torch.nn.functional.interpolate(depth_t, size=(h, w), mode="bilinear", align_corners=True)
+                depth_np = depth_t.squeeze().numpy()
             
             # Falls Depth 0-1 ist, auf 0-255 skalieren
             if depth_np.max() <= 1.0:
