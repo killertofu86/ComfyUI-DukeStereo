@@ -254,7 +254,7 @@ class DukeStereoSBS:
             depths.extend([d.cpu().numpy() for d in out])
         return depths
 
-    def normalize_depth(self, depth, h, w, convergence_point):
+    def normalize_depth(self, depth, h, w, convergence_point, stereo_offset_exponent):
         """Depth auf Bildgröße interpolieren und normalisieren mit Convergence Point."""
         depth_t = torch.from_numpy(depth).unsqueeze(0).unsqueeze(0).float()
         depth_t = torch.nn.functional.interpolate(depth_t, size=(h, w), mode="bilinear", align_corners=True)
@@ -266,6 +266,12 @@ class DukeStereoSBS:
         
         # Convergence point anwenden (verschiebt wo Null-Parallax liegt)
         normalized = normalized - convergence_point
+        
+        # Stereo offset exponent mit Vorzeichen-Handling
+        # (negative Werte durch convergence_point müssen Vorzeichen behalten)
+        sign = np.sign(normalized)
+        abs_depth = np.abs(normalized)
+        normalized = sign * np.power(abs_depth, stereo_offset_exponent)
         
         return normalized
 
@@ -285,7 +291,7 @@ class DukeStereoSBS:
             
             for img, depth in zip(batch_imgs, batch_depths):
                 img_np = np.array(img, dtype=np.uint8)
-                depth_norm = self.normalize_depth(depth, self.h, self.w, convergence_point)
+                depth_norm = self.normalize_depth(depth, self.h, self.w, convergence_point, stereo_offset_exponent)
                 
                 # Optional: Edge-aware Depth Blur
                 if depth_blur > 0:
@@ -301,10 +307,10 @@ class DukeStereoSBS:
                 else:
                     # Polylines-basierter Warp
                     left = apply_stereo_divergence_polylines(
-                        img_np, depth_norm, divergence_px, -separation_px, stereo_offset_exponent, fill_technique
+                        img_np, depth_norm, divergence_px, -separation_px, 1.0, fill_technique
                     )
                     right = apply_stereo_divergence_polylines(
-                        img_np, depth_norm, -divergence_px, separation_px, stereo_offset_exponent, fill_technique
+                        img_np, depth_norm, -divergence_px, separation_px, 1.0, fill_technique
                     )
                 
                 # SBS zusammenfügen (RGB für ffmpeg)
