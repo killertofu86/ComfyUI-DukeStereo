@@ -129,7 +129,7 @@ def apply_stereo_divergence_polylines(original_image, normalized_depth, divergen
         pt_end += 1
         
         for col in range(0, w):
-            coord_d = (normalized_depth[row][col] ** stereo_offset_exponent) * divergence_px
+            coord_d = normalized_depth[row][col] * divergence_px
             coord_x = col + 0.5 + coord_d + separation_px
             if PIXEL_HALF_WIDTH < EPSILON:
                 pt[pt_end] = [coord_x, abs(coord_d), col]
@@ -240,6 +240,7 @@ class DukeStereoSBS:
         }
 
     RETURN_TYPES = ("STRING",)
+    OUTPUT_NODE = True
     RETURN_NAMES = ("video_path",)
     FUNCTION = "execute"
     CATEGORY = "Stereo"
