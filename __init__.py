@@ -1,5 +1,3 @@
-# __init__.py
-from .nodes import NODE_CLASS_MAPPINGS , NODE_DISPLAY_NAME_MAPPINGS 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
+from .duke_stereo_streaming import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
-print("### Meine Custom Nodes (Stereo): Geladen ###")
+__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
