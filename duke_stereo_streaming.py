@@ -105,6 +105,8 @@ class DukeStereoVideo:
                 "convergence_point": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "stereo_offset_exponent": ("FLOAT", {"default": 2.0, "min": 0.1, "max": 4.0, "step": 0.1}),
                 "fill_technique": (["polylines_soft", "polylines_sharp", "naive", "none"],),
+                "depth_blur": ("INT", {"default": 6, "min": 0, "max": 50}),
+                "depth_blur_edge_threshold": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 50.0, "step": 0.5}),
                 "crf": ("INT", {"default": 19, "min": 0, "max": 51}),
             }
         }
@@ -116,7 +118,8 @@ class DukeStereoVideo:
     CATEGORY = "Stereo"
 
     def execute(self, images, depth_maps, output_path, fps, divergence, separation,
-                convergence_point, stereo_offset_exponent, fill_technique, crf):
+                convergence_point, stereo_offset_exponent, fill_technique, depth_blur,
+                depth_blur_edge_threshold, crf):
         
         import comfy.utils
         
@@ -182,6 +185,19 @@ class DukeStereoVideo:
             # Falls Depth 0-1 ist, auf 0-255 skalieren
             if depth_np.max() <= 1.0:
                 depth_np = (depth_np * 255).astype(np.float32)
+            
+            # Edge-aware depth blur
+            if depth_blur > 0:
+                from scipy.ndimage import gaussian_filter
+                blurred = gaussian_filter(depth_np, sigma=depth_blur)
+                if depth_blur_edge_threshold > 0:
+                    # Edge-aware: nur dort blurren wo Gradient klein ist
+                    grad_y, grad_x = np.gradient(depth_np)
+                    edge_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+                    edge_mask = edge_magnitude > depth_blur_edge_threshold
+                    depth_np = np.where(edge_mask, depth_np, blurred)
+                else:
+                    depth_np = blurred
             
             # Stereo-Warp mit originaler Funktion
             left = apply_stereo_divergence(
