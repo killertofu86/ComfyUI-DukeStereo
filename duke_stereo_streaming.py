@@ -15,12 +15,22 @@ from PIL import Image
 from .stereoimage_generation import apply_stereo_divergence
 
 
-def resolve_output_path(path_template):
+def resolve_output_path(path_template, params=None):
     """
     Resolve format strings and auto-increment if file exists.
-    Supports: %date:FORMAT%, %time:FORMAT% (Java-style format converted to Python)
+    Supports: 
+    - %date:FORMAT%, %time:FORMAT% (Java-style format converted to Python)
+    - %param_name% for any node parameter (e.g. %divergence%, %model%)
+    
+    Args:
+        path_template: Path with format strings
+        params: Dict of node parameters to substitute
     """
     now = datetime.now()
+    params = params or {}
+    
+    # Expand ~ to home directory
+    path = str(Path(path_template).expanduser())
     
     # Convert %date:FORMAT% and %time:FORMAT% patterns
     def replace_format(match):
@@ -31,7 +41,11 @@ def resolve_output_path(path_template):
         fmt = fmt.replace('HH', '%H').replace('mm', '%M').replace('ss', '%S')
         return now.strftime(fmt)
     
-    path = re.sub(r'%(\w+):([^%]+)%', replace_format, path_template)
+    path = re.sub(r'%(date|time):([^%]+)%', replace_format, path)
+    
+    # Replace %param_name% with parameter values
+    for key, val in params.items():
+        path = path.replace(f'%{key}%', str(val))
     
     # Create directory if needed
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -109,8 +123,24 @@ class DukeStereoVideo:
         n_frames = images.shape[0]
         h, w = images.shape[1], images.shape[2]
         
+        # Build params dict for path formatting
+        path_params = {
+            'divergence': divergence,
+            'separation': separation,
+            'stereo_offset_exponent': stereo_offset_exponent,
+            'convergence_point': convergence_point,
+            'fill_technique': fill_technique,
+            'depth_blur': depth_blur,
+            'depth_blur_edge_threshold': depth_blur_edge_threshold,
+            'fps': fps,
+            'crf': crf,
+            'width': w,
+            'height': h,
+            'frames': n_frames,
+        }
+        
         # Resolve output path and validate
-        output_path = resolve_output_path(output_path)
+        output_path = resolve_output_path(output_path, path_params)
         output_dir = Path(output_path).parent
         
         try:
