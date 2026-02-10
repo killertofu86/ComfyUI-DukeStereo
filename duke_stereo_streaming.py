@@ -100,7 +100,7 @@ class DukeStereoVideo:
                 "depth_maps": ("IMAGE",),
                 "output_path": ("STRING", {"default": "/ComfyUI/output/stereo_%date:yyyy-MM-dd%_%time:HH-mm-ss%.mp4"}),
                 "fps": ("INT", {"default": 24, "min": 1, "max": 120}),
-                "divergence": ("FLOAT", {"default": 2.5, "min": 0.0, "max": 10.0, "step": 0.1}),
+                "divergence": ("FLOAT", {"default": 2.5, "min": 0.0, "max": 50.0, "step": 0.1}),
                 "separation": ("FLOAT", {"default": 0.0, "min": -5.0, "max": 5.0, "step": 0.1}),
                 "convergence_point": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "stereo_offset_exponent": ("FLOAT", {"default": 2.0, "min": 0.1, "max": 4.0, "step": 0.1}),
