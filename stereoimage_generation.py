@@ -265,15 +265,15 @@ def create_stereoimages_gpu(image_tensor, depth_tensor, divergence, separation=0
         right_depth = depth_tensor
 
     # Calculate divergence in pixels
-    divergence_px = (divergence / 100.0) * W
-    separation_px = (separation / 100.0) * W
+    divergence_px = divergence * 7.2  # Konstant wie bei 720p
+    separation_px = separation * 7.2  # Konstant wie bei 720p
 
     # Calculate balanced divergence for each eye
     left_divergence = divergence * (1 + stereo_balance)
     right_divergence = divergence * (1 - stereo_balance)
 
-    left_divergence_px = (left_divergence / 100.0) * W
-    right_divergence_px = (right_divergence / 100.0) * W
+    left_divergence_px = left_divergence * 7.2  # Konstant wie bei 720p
+    right_divergence_px = right_divergence * 7.2  # Konstant wie bei 720p
 
     # Generate left and right eye views using GPU warping
     if left_divergence < 0.001:
@@ -751,8 +751,8 @@ def apply_stereo_divergence(original_image, depth, divergence, separation, stere
     # Objects further will have negative parallax (recede)
     normalized_depth = normalized_depth - convergence_point
 
-    divergence_px = (divergence / 100.0) * original_image.shape[1]
-    separation_px = (separation / 100.0) * original_image.shape[1]
+    divergence_px = divergence * 7.2  # Konstant wie bei 720p
+    separation_px = separation * 7.2  # Konstant wie bei 720p
     
     if fill_technique == 'none_post':
         return apply_stereo_divergence_naive_post(original_image, normalized_depth, divergence_px, separation_px, stereo_offset_exponent)
