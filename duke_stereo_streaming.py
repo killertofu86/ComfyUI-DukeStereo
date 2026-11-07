@@ -221,11 +221,91 @@ class DukeStereoVideo:
         print(f"[DukeStereo] Done: {output_path}")
         return (output_path,)
 
+class DukeStereoVideoBatch(DukeStereoVideo):
+    @classmethod
+    def INPUT_TYPES(s):
+        d = DukeStereoVideo.INPUT_TYPES()
+        d["optional"] = {"meta_batch": ("VHS_BatchManager",)}
+        d["hidden"] = {"unique_id": "UNIQUE_ID"}
+        return d
+
+    def execute(self, images, depth_maps, output_path, fps, divergence, separation,
+                convergence_point, stereo_offset_exponent, fill_technique, depth_blur,
+                depth_blur_edge_threshold, crf, meta_batch=None, unique_id=None):
+        import comfy.utils
+        try: from videohelpersuite.utils import requeue_workflow_unchecked
+        except ModuleNotFoundError:
+            import sys
+            sys.path.insert(0, str(Path(__file__).parents[1] / 'comfyui-videohelpersuite'))
+            from videohelpersuite.utils import requeue_workflow_unchecked
+
+        n_frames = images.shape[0]
+        h, w = images.shape[1], images.shape[2]
+        if meta_batch is not None and unique_id in meta_batch.outputs:
+            output_path, writer, write_queue = meta_batch.outputs[unique_id]
+        else:
+            path_params = dict(divergence=divergence, separation=separation,
+                stereo_offset_exponent=stereo_offset_exponent, convergence_point=convergence_point,
+                fill_technique=fill_technique, depth_blur=depth_blur,
+                depth_blur_edge_threshold=depth_blur_edge_threshold, fps=fps, crf=crf,
+                width=w, height=h, frames=n_frames)
+            output_path = resolve_output_path(output_path, path_params)
+            output_dir = Path(output_path).parent
+            try: output_dir.mkdir(parents=True, exist_ok=True)
+            except PermissionError: raise Exception(f"[DukeStereo] Cannot create directory: {output_dir}")
+            test_file = output_dir / ".duke_stereo_write_test"
+            try: test_file.touch(); test_file.unlink()
+            except PermissionError: raise Exception(f"[DukeStereo] No write permission for: {output_dir}")
+            print(f"[DukeStereo] Writing batched video to: {output_path}")
+            write_queue = Queue(maxsize=16)
+            writer = Thread(target=writer_thread, args=(output_path, fps, w * 2, h, write_queue, crf))
+            writer.start()
+            if meta_batch is not None: meta_batch.outputs[unique_id] = (output_path, writer, write_queue)
+
+        pbar = comfy.utils.ProgressBar(n_frames)
+        for i in range(n_frames):
+            img_np = (images[i].cpu().numpy() * 255).astype(np.uint8)
+            depth_np = depth_maps[i].cpu().numpy()
+            if depth_np.ndim == 3: depth_np = depth_np[:, :, 0]
+            if depth_np.shape[:2] != (h, w):
+                depth_t = torch.from_numpy(depth_np).unsqueeze(0).unsqueeze(0).float()
+                depth_np = torch.nn.functional.interpolate(depth_t, size=(h, w), mode="bilinear", align_corners=True).squeeze().numpy()
+            if depth_np.max() <= 1.0: depth_np = (depth_np * 255).astype(np.float32)
+            if depth_blur > 0:
+                from scipy.ndimage import gaussian_filter
+                blurred = gaussian_filter(depth_np, sigma=depth_blur)
+                if depth_blur_edge_threshold > 0:
+                    grad_y, grad_x = np.gradient(depth_np)
+                    edge_mask = np.sqrt(grad_x**2 + grad_y**2) > depth_blur_edge_threshold
+                    depth_np = np.where(edge_mask, depth_np, blurred)
+                else: depth_np = blurred
+            left = apply_stereo_divergence(img_np, depth_np, divergence, -separation,
+                stereo_offset_exponent, fill_technique, convergence_point)
+            right = apply_stereo_divergence(img_np, depth_np, -divergence, separation,
+                stereo_offset_exponent, fill_technique, convergence_point)
+            write_queue.put(np.concatenate([left, right], axis=1))
+            pbar.update(1)
+
+        if meta_batch is not None and not meta_batch.has_closed_inputs:
+            requeue_workflow_unchecked()
+            return {"ui": {"unfinished_batch": [True]}, "result": (output_path,)}
+
+        write_queue.put(None)
+        writer.join()
+        if meta_batch is not None:
+            meta_batch.outputs.pop(unique_id, None)
+            if not meta_batch.outputs: meta_batch.reset()
+        print(f"[DukeStereo] Done: {output_path}")
+        return (output_path,)
+
+
 
 NODE_CLASS_MAPPINGS = {
-    "Duke Stereo Video": DukeStereoVideo
+    "Duke Stereo Video": DukeStereoVideo,
+    "Duke Stereo Video Batch": DukeStereoVideoBatch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Duke Stereo Video": "Duke Stereo Video (SBS)"
+    "Duke Stereo Video": "Duke Stereo Video (SBS)",
+    "Duke Stereo Video Batch": "Duke Stereo Video Batch (SBS, VHS)",
 }
