@@ -2,6 +2,7 @@
 import subprocess
 import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
@@ -86,6 +87,41 @@ def writer_thread(out_path, fps, width, height, queue, crf=19):
     proc.wait()
 
 
+def mux_audio(output_path, audio):
+    if audio is None:
+        return
+    waveform = audio["waveform"]
+    if waveform.ndim != 3 or waveform.shape[0] != 1:
+        raise ValueError("[DukeStereo] Audio must have shape [1, channels, samples].")
+    if waveform.shape[-1] == 0:
+        return
+    sample_rate = int(audio["sample_rate"])
+    if sample_rate <= 0 or waveform.shape[1] == 0:
+        raise ValueError("[DukeStereo] Audio sample rate and channel count must be positive.")
+
+    output = Path(output_path)
+    with tempfile.TemporaryDirectory(prefix="duke-audio-", dir=output.parent) as work:
+        raw_audio = Path(work) / "audio.f32"
+        muxed = Path(work) / output.name
+        with raw_audio.open("wb") as stream:
+            for start in range(0, waveform.shape[-1], sample_rate):
+                chunk = waveform[0, :, start:start + sample_rate]
+                stream.write(chunk.detach().to(device="cpu", dtype=torch.float32)
+                             .transpose(0, 1).contiguous().numpy().tobytes())
+        command = [
+            "ffmpeg", "-v", "error", "-y", "-i", str(output),
+            "-f", "f32le", "-ar", str(sample_rate), "-ac", str(waveform.shape[1]),
+            "-i", str(raw_audio), "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+            "-af", "apad", "-shortest", str(muxed),
+        ]
+        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if result.returncode:
+            raise RuntimeError("[DukeStereo] Audio mux failed; silent video retained: "
+                               + result.stderr.decode(errors="replace")[-4000:])
+        os.replace(muxed, output)
+
+
 class DukeStereoVideo:
     """
     ComfyUI Node für Stereo SBS Video mit Streaming (RAM-effizient).
@@ -108,7 +144,8 @@ class DukeStereoVideo:
                 "depth_blur": ("INT", {"default": 6, "min": 0, "max": 50}),
                 "depth_blur_edge_threshold": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 50.0, "step": 0.5}),
                 "crf": ("INT", {"default": 19, "min": 0, "max": 51}),
-            }
+            },
+            "optional": {"audio": ("AUDIO",)},
         }
 
     RETURN_TYPES = ("STRING",)
@@ -119,7 +156,7 @@ class DukeStereoVideo:
 
     def execute(self, images, depth_maps, output_path, fps, divergence, separation,
                 convergence_point, stereo_offset_exponent, fill_technique, depth_blur,
-                depth_blur_edge_threshold, crf):
+                depth_blur_edge_threshold, crf, audio=None):
         
         import comfy.utils
         
@@ -217,6 +254,7 @@ class DukeStereoVideo:
         # Writer beenden
         write_queue.put(None)
         writer.join()
+        mux_audio(output_path, audio)
         
         print(f"[DukeStereo] Done: {output_path}")
         return (output_path,)
@@ -225,13 +263,13 @@ class DukeStereoVideoBatch(DukeStereoVideo):
     @classmethod
     def INPUT_TYPES(s):
         d = DukeStereoVideo.INPUT_TYPES()
-        d["optional"] = {"meta_batch": ("VHS_BatchManager",)}
+        d["optional"]["meta_batch"] = ("VHS_BatchManager",)
         d["hidden"] = {"unique_id": "UNIQUE_ID"}
         return d
 
     def execute(self, images, depth_maps, output_path, fps, divergence, separation,
                 convergence_point, stereo_offset_exponent, fill_technique, depth_blur,
-                depth_blur_edge_threshold, crf, meta_batch=None, unique_id=None):
+                depth_blur_edge_threshold, crf, meta_batch=None, unique_id=None, audio=None):
         import comfy.utils
         try: from videohelpersuite.utils import requeue_workflow_unchecked
         except ModuleNotFoundError:
@@ -242,7 +280,7 @@ class DukeStereoVideoBatch(DukeStereoVideo):
         n_frames = images.shape[0]
         h, w = images.shape[1], images.shape[2]
         if meta_batch is not None and unique_id in meta_batch.outputs:
-            output_path, writer, write_queue = meta_batch.outputs[unique_id]
+            output_path, writer, write_queue, audio = meta_batch.outputs[unique_id]
         else:
             path_params = dict(divergence=divergence, separation=separation,
                 stereo_offset_exponent=stereo_offset_exponent, convergence_point=convergence_point,
@@ -260,7 +298,7 @@ class DukeStereoVideoBatch(DukeStereoVideo):
             write_queue = Queue(maxsize=16)
             writer = Thread(target=writer_thread, args=(output_path, fps, w * 2, h, write_queue, crf))
             writer.start()
-            if meta_batch is not None: meta_batch.outputs[unique_id] = (output_path, writer, write_queue)
+            if meta_batch is not None: meta_batch.outputs[unique_id] = (output_path, writer, write_queue, audio)
 
         pbar = comfy.utils.ProgressBar(n_frames)
         for i in range(n_frames):
@@ -292,6 +330,7 @@ class DukeStereoVideoBatch(DukeStereoVideo):
 
         write_queue.put(None)
         writer.join()
+        mux_audio(output_path, audio)
         if meta_batch is not None:
             meta_batch.outputs.pop(unique_id, None)
             if not meta_batch.outputs: meta_batch.reset()

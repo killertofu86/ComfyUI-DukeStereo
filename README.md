@@ -43,6 +43,23 @@ pip install -r ComfyUI-DukeStereo/requirements.txt
 
 - **images** - Video frames (IMAGE)
 - **depth_maps** - Depth maps from LeReS or similar (IMAGE)
+- **audio** - Optional ComfyUI AUDIO, e.g. the audio output of VHS Load Video
+
+Both stereo output nodes support audio. Connect the video loader's `audio`
+output directly to the stereo node; audio bypasses image upscaling and depth
+processing. Without this connection, output remains silent.
+
+The batch node retains the first batch's audio and muxes it once, after the last
+meta-batch. Supply the complete source audio, as VHS Load Video does, rather than
+individual audio chunks. Audio is encoded as AAC; the H.264 video is copied
+without re-encoding. Longer audio is trimmed to the video; shorter audio is
+padded with silence. Temporary audio files use the output directory and are
+removed after muxing. If muxing fails, the silent video is retained.
+
+For a directory workflow, expose the path loader's AUDIO output from its group
+and route audio from the same source as the selected images. Output fps must
+match the loader's effective frame rate for synchronization. After updating,
+restart ComfyUI before starting a new meta-batch run.
 
 ## Output Path Examples
 
