@@ -1,6 +1,7 @@
 """Directory sequencing tied to completion of both DA3 passes, not prompt count."""
 import hashlib
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DIRECTORY_KEY = '__duke_da3_directory__'
@@ -18,6 +19,7 @@ class DirectoryRun:
     owner: str
     index: int = 0
     identities: tuple = ()
+    started_at: float = field(default_factory=lambda: time.monotonic())
 
     def __post_init__(self):
         self.identities = tuple(self.identity(p) for p in self.files)
@@ -65,6 +67,7 @@ def finish_video(manager):
     if run.index == len(run.files):
         entry[-1].close()
         return False
+    run.started_at = time.monotonic()
     manager.outputs[DIRECTORY_KEY] = entry
     return True
 

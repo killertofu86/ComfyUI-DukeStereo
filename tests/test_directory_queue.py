@@ -21,6 +21,7 @@ class Manager:
         self.inputs = {}
         self.has_closed_inputs = False
         self.total_frames = 3
+        self.frames_per_batch = 2
         self.resets = 0
 
     def reset(self):
@@ -55,6 +56,11 @@ class DirectoryTests(unittest.TestCase):
         self.run_directory(True)
 
     def run_directory(self, mux_failure):
+        clock = [100.0]
+        def mux_audio(*args):
+            if mux_failure:
+                raise RuntimeError('mux failed')
+            clock[0] += 5  # Audio finalization is included in total runtime.
         comfy = types.ModuleType('comfy')
         mm = types.ModuleType('comfy.model_management')
         mm.throw_exception_if_processing_interrupted = lambda: None
@@ -80,8 +86,10 @@ class DirectoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(sys.modules, modules), \
                 patch.object(SequenceBuilder, 'append', append), \
                 patch('duke_test.da3_sequence.requeue') as requeue, \
+                patch('duke_test.da3_sequence.stereo_status') as status, \
+                patch('duke_test.directory_queue.time.monotonic', side_effect=lambda: clock[0]), \
                 patch('duke_test.duke_stereo_streaming.mux_audio',
-                      side_effect=RuntimeError('mux failed') if mux_failure else None) as mux, \
+                      side_effect=mux_audio) as mux, \
                 patch('subprocess.Popen', Process), \
                 patch('duke_test.stereoimage_generation.apply_stereo_divergence',
                       side_effect=lambda rgb, *a, **k: rgb):
@@ -116,13 +124,24 @@ class DirectoryTests(unittest.TestCase):
                                 separation=0, convergence_point=1, stereo_offset_exponent=2,
                                 fill_technique='none', depth_blur=0, depth_blur_edge_threshold=6,
                                 crf=19, meta_batch=manager, unique_id='stereo')
+                    # Lazy evaluation announces the batch before requesting the upscaler.
+                    self.assertEqual(stereo.check_lazy_status(
+                        depth_sequence=str(path), meta_batch=manager, unique_id='stereo'), ['images'])
+                    status.assert_called_with('stereo',
+                        f'Video {video_index + 1}/2 · Tiefe fertig\n'
+                        f'Upscale/Stereo · Batch {2 if final else 1}/2')
                     if mux_failure and final:
                         with self.assertRaisesRegex(RuntimeError, 'mux failed'):
                             stereo.execute(**args)
                         self.assertTrue(path.exists())
                         self.assertEqual(directory_run(manager).index, 0)
+                        status.assert_called_with('stereo', 'Video 1/2 · Fehler bei Stereo-Ausgabe')
                         return
+                    if final:
+                        clock[0] += 83
                     stereo.execute(**args)
+                status.assert_called_with('stereo',
+                    f'Video {video_index + 1}/2 · Fertig gespeichert\nGesamtlaufzeit: 00:01:28')
                 self.assertFalse(path.exists())
             self.assertNotEqual(keys[0], keys[1])
             self.assertFalse(manager.outputs)

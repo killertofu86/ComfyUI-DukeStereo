@@ -6,6 +6,7 @@ import json
 import sys
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -16,6 +17,26 @@ from .duke_stereo_streaming import DukeStereoVideoBatch
 from .directory_queue import DIRECTORY_KEY, DukeDA3DirectoryQueue, directory_run, rewind, finish_video
 
 logger = logging.getLogger(__name__)
+
+def format_runtime(seconds):
+    hours, remainder = divmod(max(0, int(seconds)), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f'{hours:02d}:{minutes:02d}:{seconds:02d}'
+
+
+def stereo_status(unique_id, message):
+    logger.info('[Duke Stereo] %s', message.replace('\n', ' · '))
+    if unique_id is None:
+        return
+    try:
+        from server import PromptServer
+    except ImportError:
+        return
+    server = PromptServer.instance
+    if server is not None:
+        server.send_sync('duke_stereo_status', {'node': str(unique_id), 'text': message},
+                         getattr(server, 'client_id', None))
+
 
 def report_progress(stage, current, total, detail=""):
     logger.info("[Duke DA3] %s: %s/%s %s", stage, current, total or "?", detail)
@@ -297,9 +318,21 @@ class DukeStereoPrepared(DukeStereoVideoBatch):
                                   frame_stride=('INT', {'default': 1, 'min': 1}))
         return inputs
 
-    def check_lazy_status(self, images=None, **kwargs):
+    def check_lazy_status(self, images=None, depth_sequence=None, meta_batch=None,
+                          unique_id=None, **kwargs):
         # The prepared path is blocked during pass one, so upstream upscaling
         # is requested only once the complete depth sequence is available.
+        if images is None and depth_sequence is not None:
+            meta = json.loads((Path(depth_sequence) / 'manifest.json').read_text())
+            run = directory_run(meta_batch)
+            video = f'Video {run.index + 1}/{len(run.files)}' if run else 'Video'
+            entry = meta_batch.outputs.get(unique_id) if meta_batch is not None else None
+            cursor = entry[0]['cursor'] if entry else 0
+            size = getattr(meta_batch, 'frames_per_batch', meta['frames'])
+            if size <= 0:
+                size = meta['frames']
+            batch, batches = cursor // size + 1, math.ceil(meta['frames'] / size)
+            stereo_status(unique_id, f'{video} · Tiefe fertig\nUpscale/Stereo · Batch {batch}/{batches}')
         return ['images'] if images is None else []
 
     def execute(self, images, depth_sequence, source_key, start_frame, frame_stride, **kwargs):
@@ -319,6 +352,7 @@ class DukeStereoPrepared(DukeStereoVideoBatch):
             if meta[key] != value:
                 raise ValueError(f'Depth sequence mismatch: {key}')
         manager, uid = kwargs.get('meta_batch'), kwargs.get('unique_id')
+        video = f'Video {run.index + 1}/{len(run.files)}' if run else 'Video'
         import subprocess
         from .duke_stereo_streaming import resolve_output_path, mux_audio
         from .stereoimage_generation import apply_stereo_divergence
@@ -335,7 +369,8 @@ class DukeStereoPrepared(DukeStereoVideoBatch):
                 '-i', '-', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf',
                 str(kwargs['crf']), '-preset', 'medium', output], stdin=subprocess.PIPE)
             state = dict(cursor=0, proc=proc, output=output, audio=kwargs.get('audio'),
-                         sequence=str(path.resolve()), shape=(h, w))
+                         sequence=str(path.resolve()), shape=(h, w),
+                         started_at=time.monotonic())
             def cleanup():
                 try:
                     yield
@@ -392,13 +427,19 @@ class DukeStereoPrepared(DukeStereoVideoBatch):
             if state['proc'].returncode:
                 raise RuntimeError('Stereo ffmpeg failed')
             report_progress('Finalize video and audio', end, meta['frames'])
+            stereo_status(uid, f'{video} · Alle Batches fertig\nVideo und Audio abschließen')
             mux_audio(state['output'], state['audio'])
             remove_temporary_sequence(path, meta)
         except BaseException:
+            stereo_status(uid, f'{video} · Fehler bei Stereo-Ausgabe')
             state['guard'].close()
             if manager is not None:
                 manager.outputs.pop(uid, None)
             raise
+        started_at = run.started_at if run is not None else state['started_at']
+        label = 'Gesamtlaufzeit' if run is not None else 'Stereo-Laufzeit'
+        elapsed = format_runtime(time.monotonic() - started_at)
+        stereo_status(uid, f'{video} · Fertig gespeichert\n{label}: {elapsed}')
         if manager is not None:
             manager.outputs.pop(uid, None)
             if finish_video(manager):

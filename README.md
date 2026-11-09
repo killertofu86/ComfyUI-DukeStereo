@@ -178,6 +178,22 @@ Frames im zweiten Durchlauf; im Verzeichnismodus wird zusätzlich die
 Videoposition protokolliert. VHS selbst zählt Requeues weiterhin über beide
 Phasen; dessen Batch-Zähler ist kein Gesamtfortschritt für den DA3-Ablauf.
 
+Der **Duke Stereo Prepared Sequence** zeigt außerdem direkt am Node
+`Video 2/26 · Tiefe fertig` und darunter `Upscale/Stereo · Batch 3/12`.
+Der jeweilige Batch wird vor dem Anfordern des Upscalers angekündigt; der
+Zähler beginnt für jedes Video bei 1 und umfasst nur den zweiten Durchlauf.
+Nach dem letzten Batch folgen Abschluss von Video und Audio sowie
+`Fertig gespeichert`. Fehler bei der Ausgabe werden ebenfalls angezeigt.
+Im Verzeichnismodus steht beim Abschluss außerdem die `Gesamtlaufzeit: HH:MM:SS`
+pro Video: ab Auswahl der Datei, einschließlich Tiefenberechnung, Upscaling,
+Stereo und Audio-Abschluss. Der Timer beginnt beim nächsten Video neu und
+umfasst auch Wartezeiten zwischen den Batches. Ohne Directory Queue wird die
+`Stereo-Laufzeit` ab dem ersten Aufruf der Stereo-Ausgabe gemessen; eine zuvor
+separat ausgeführte Tiefenberechnung ist darin nicht enthalten.
+Die Statusanzeige wird auch im Terminal ausgegeben. Für die Node-Anzeige
+ComfyUI nach dem Update neu starten und die Webseite neu laden; den laufenden
+Verzeichnislauf vorher abschließen lassen.
+
 Pufferung und Überlappung wurden synthetisch auch mit 723 Frames und wechselnden
 Batchgrößen geprüft. Der automatische Einzelvideo-Ablauf wurde in ComfyUI mit
 Small und Base bei bf16, 64/8, 1024² und 48 FPS durchlaufen: Beide Ausgaben
