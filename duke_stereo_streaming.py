@@ -123,6 +123,7 @@ def mux_audio(output_path, audio):
 
 
 class DukeStereoVideo:
+    normalize_depth = True
     """
     ComfyUI Node für Stereo SBS Video mit Streaming (RAM-effizient).
     Verwendet die bewährte stereoimage_generation Logik.
@@ -220,7 +221,7 @@ class DukeStereoVideo:
                 depth_np = depth_t.squeeze().numpy()
             
             # Falls Depth 0-1 ist, auf 0-255 skalieren
-            if depth_np.max() <= 1.0:
+            if self.normalize_depth and depth_np.max() <= 1.0:
                 depth_np = (depth_np * 255).astype(np.float32)
             
             # Edge-aware depth blur
@@ -239,11 +240,11 @@ class DukeStereoVideo:
             # Stereo-Warp mit originaler Funktion
             left = apply_stereo_divergence(
                 img_np, depth_np, divergence, -separation,
-                stereo_offset_exponent, fill_technique, convergence_point
+                stereo_offset_exponent, fill_technique, convergence_point, normalize_depth=self.normalize_depth
             )
             right = apply_stereo_divergence(
                 img_np, depth_np, -divergence, separation,
-                stereo_offset_exponent, fill_technique, convergence_point
+                stereo_offset_exponent, fill_technique, convergence_point, normalize_depth=self.normalize_depth
             )
             
             # SBS zusammenfügen
@@ -274,7 +275,7 @@ class DukeStereoVideoBatch(DukeStereoVideo):
         try: from videohelpersuite.utils import requeue_workflow_unchecked
         except ModuleNotFoundError:
             import sys
-            sys.path.insert(0, str(Path(__file__).parents[1] / 'comfyui-videohelpersuite'))
+            sys.path.insert(0, str(Path(__file__).parents[1] / 'ComfyUI-VideoHelperSuite'))
             from videohelpersuite.utils import requeue_workflow_unchecked
 
         n_frames = images.shape[0]
@@ -308,19 +309,19 @@ class DukeStereoVideoBatch(DukeStereoVideo):
             if depth_np.shape[:2] != (h, w):
                 depth_t = torch.from_numpy(depth_np).unsqueeze(0).unsqueeze(0).float()
                 depth_np = torch.nn.functional.interpolate(depth_t, size=(h, w), mode="bilinear", align_corners=True).squeeze().numpy()
-            if depth_np.max() <= 1.0: depth_np = (depth_np * 255).astype(np.float32)
+            if self.normalize_depth and depth_np.max() <= 1.0: depth_np = (depth_np * 255).astype(np.float32)
             if depth_blur > 0:
                 from scipy.ndimage import gaussian_filter
                 blurred = gaussian_filter(depth_np, sigma=depth_blur)
                 if depth_blur_edge_threshold > 0:
                     grad_y, grad_x = np.gradient(depth_np)
-                    edge_mask = np.sqrt(grad_x**2 + grad_y**2) > depth_blur_edge_threshold
+                    edge_mask = np.sqrt(grad_x**2 + grad_y**2) > (depth_blur_edge_threshold if self.normalize_depth else depth_blur_edge_threshold / 255)
                     depth_np = np.where(edge_mask, depth_np, blurred)
                 else: depth_np = blurred
             left = apply_stereo_divergence(img_np, depth_np, divergence, -separation,
-                stereo_offset_exponent, fill_technique, convergence_point)
+                stereo_offset_exponent, fill_technique, convergence_point, normalize_depth=self.normalize_depth)
             right = apply_stereo_divergence(img_np, depth_np, -divergence, separation,
-                stereo_offset_exponent, fill_technique, convergence_point)
+                stereo_offset_exponent, fill_technique, convergence_point, normalize_depth=self.normalize_depth)
             write_queue.put(np.concatenate([left, right], axis=1))
             pbar.update(1)
 

@@ -725,7 +725,7 @@ def create_stereoimages(original_image, depthmap, divergence, separation=0.0, mo
     else:
         return stereo_images
 
-def apply_stereo_divergence(original_image, depth, divergence, separation, stereo_offset_exponent, fill_technique, convergence_point=0.5):
+def apply_stereo_divergence(original_image, depth, divergence, separation, stereo_offset_exponent, fill_technique, convergence_point=0.5, normalize_depth=True):
     """
     Dispatches to the desired stereo mapping algorithm.
 
@@ -740,7 +740,9 @@ def apply_stereo_divergence(original_image, depth, divergence, separation, stere
     depth_max = depth.max()
 
     # Protect against division by zero if depth map is flat (all pixels same value)
-    if depth_max == depth_min:
+    if not normalize_depth:
+        normalized_depth = np.clip(depth, 0.0, 1.0)
+    elif depth_max == depth_min:
         normalized_depth = np.zeros_like(depth)
     else:
         normalized_depth = (depth - depth_min) / (depth_max - depth_min)

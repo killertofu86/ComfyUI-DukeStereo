@@ -1,0 +1,123 @@
+{
+  "1": {
+    "class_type": "VHS_BatchManager",
+    "inputs": {
+      "frames_per_batch": 64
+    }
+  },
+  "2": {
+    "class_type": "Duke DA3 Directory Queue",
+    "inputs": {
+      "directory": "/path/to/input-videos",
+      "meta_batch": [
+        "1",
+        0
+      ],
+      "start_index": 0,
+      "max_videos": 0
+    }
+  },
+  "3": {
+    "class_type": "VHS_LoadVideoPath",
+    "inputs": {
+      "video": [
+        "2",
+        0
+      ],
+      "meta_batch": [
+        "1",
+        0
+      ],
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1,
+      "format": "AnimateDiff"
+    }
+  },
+  "4": {
+    "class_type": "DownloadAndLoadDepthAnythingV3Model",
+    "inputs": {
+      "model": "da3_base.safetensors",
+      "precision": "bf16",
+      "attention": "sdpa"
+    }
+  },
+  "5": {
+    "class_type": "Duke DA3 Prepare Sequence",
+    "inputs": {
+      "images": [
+        "3",
+        0
+      ],
+      "da3_model": [
+        "4",
+        0
+      ],
+      "meta_batch": [
+        "1",
+        0
+      ],
+      "cache_directory": "output/duke-depth",
+      "source_key": "auto",
+      "fps": 48.0,
+      "start_frame": 0,
+      "frame_stride": 1,
+      "chunk_size": 64,
+      "overlap": 8,
+      "workflow_mode": "prepare_and_stereo",
+      "cache_policy": "delete_after_stereo"
+    }
+  },
+  "6": {
+    "class_type": "DukeUpscalerNCNN",
+    "inputs": {
+      "images": [
+        "3",
+        0
+      ],
+      "model": "realesr-animevideov3",
+      "scale": 2,
+      "tile_size": 1024,
+      "gpu_id": -1,
+      "threads": "8:4:8",
+      "keep_temp": false
+    }
+  },
+  "7": {
+    "class_type": "Duke Stereo Prepared Sequence",
+    "inputs": {
+      "images": [
+        "6",
+        0
+      ],
+      "audio": [
+        "3",
+        2
+      ],
+      "meta_batch": [
+        "1",
+        0
+      ],
+      "depth_sequence": [
+        "5",
+        0
+      ],
+      "output_path": "output/stereo_%source_key%.mp4",
+      "fps": 48.0,
+      "source_key": "auto",
+      "start_frame": 0,
+      "frame_stride": 1,
+      "divergence": -2.5,
+      "separation": 0.0,
+      "convergence_point": 1.0,
+      "stereo_offset_exponent": 2.0,
+      "fill_technique": "polylines_soft",
+      "depth_blur": 6,
+      "depth_blur_edge_threshold": 6.0,
+      "crf": 19
+    }
+  }
+}
