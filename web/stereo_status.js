@@ -8,19 +8,22 @@ app.registerExtension({
         const original = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             original?.apply(this, arguments);
-            this.dukeStatus = this.addWidget("text", "Status", "Warte auf fertige Tiefe", () => {}, {
+            this.dukeStatus = this.addCustomWidget({
+                type: "duke_status",
+                name: "Status",
+                value: "Warte auf fertige Tiefe",
                 serialize: false,
+                disabled: true,
+                computeSize: () => [this.size[0], 48],
+                draw(ctx, node, width, y) {
+                    ctx.save();
+                    ctx.fillStyle = "#ddd";
+                    ctx.font = "13px sans-serif";
+                    const lines = String(this.value).split("\n");
+                    lines.forEach((line, i) => ctx.fillText(line, 12, y + 18 + i * 20, width - 24));
+                    ctx.restore();
+                },
             });
-            this.dukeStatus.disabled = true;
-            this.dukeStatus.computeSize = () => [this.size[0], 48];
-            this.dukeStatus.draw = function (ctx, node, width, y) {
-                ctx.save();
-                ctx.fillStyle = "#ddd";
-                ctx.font = "13px sans-serif";
-                const lines = String(this.value).split("\n");
-                lines.forEach((line, i) => ctx.fillText(line, 12, y + 18 + i * 20, width - 24));
-                ctx.restore();
-            };
             this.setSize(this.computeSize());
         };
     },
